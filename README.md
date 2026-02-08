@@ -1,4 +1,4 @@
-# Real-Time Anime Watching Platform
+# Watchium - Real-Time Anime Watching Platform
 
 A comprehensive backend system for synchronized anime watching experiences built with Supabase, featuring WebSocket-based real-time synchronization, threaded comments, and intelligent room management.
 
@@ -68,41 +68,32 @@ supabase/
 - **Security**: Row-Level Security (RLS) with data validation
 - **Rate Limiting**: Database-based controls for critical actions
 
-## 📋 Prerequisites
+## 🌐 Deployment
 
+**Project URL**: `https://ahigvhlqlikkkjsjikcj.supabase.co`
+
+### Prerequisites
 - Supabase account and project
-- Node.js 18+ (for local development)
 - Supabase CLI (for deployment and management)
 - TypeScript knowledge
 - WebSocket client capabilities
 
 ## 🚀 Quick Start
 
-### 1. Clone and Setup
+### 1. Setup Supabase Project
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd anime-sync-platform
-
 # Install Supabase CLI
 npm install -g supabase
 
 # Login to Supabase
 supabase login
+
+# Link to your project
+supabase link --project-ref ahigvhlqlikkkjsjikcj
 ```
 
-### 2. Initialize Supabase Project
-
-```bash
-# Link to your Supabase project
-supabase link --project-ref <your-project-ref>
-
-# Start local development
-supabase start
-```
-
-### 3. Apply Database Migrations
+### 2. Apply Database Migrations
 
 ```bash
 # Apply all migrations in order
@@ -112,7 +103,7 @@ supabase db push
 supabase db shell --command "SELECT * FROM pg_publication_tables WHERE pubname = 'supabase_realtime';"
 ```
 
-### 4. Deploy Edge Functions
+### 3. Deploy Edge Functions
 
 ```bash
 # Deploy all functions
@@ -125,13 +116,13 @@ supabase functions deploy rooms-create
 supabase functions list
 ```
 
-### 5. Configure Environment
+### 4. Configure Environment
 
 Set these environment variables in your Supabase project:
 
 ```bash
 # Required for Edge Functions
-SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_URL=https://ahigvhlqlikkkjsjikcj.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 # Optional: For scheduled cleanup
@@ -143,7 +134,7 @@ CRON_SCHEDULE="0 2 * * *"  # Daily at 2 AM UTC
 ### Creating a Room
 
 ```javascript
-const response = await fetch('https://your-project.supabase.co/functions/v1/rooms-create', {
+const response = await fetch('https://ahigvhlqlikkkjsjikcj.supabase.co/functions/v1/rooms-create', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -166,7 +157,7 @@ console.log('Realtime channel:', data.realtime_channel);
 ### Joining a Room
 
 ```javascript
-const response = await fetch('https://your-project.supabase.co/functions/v1/rooms-join', {
+const response = await fetch('https://ahigvhlqlikkkjsjikcj.supabase.co/functions/v1/rooms-join', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -204,7 +195,7 @@ channel.on('postgres_changes',
   (payload) => {
     // Auto-sync video to host state
     if (payload.new.host_user_id !== userId) {
-      video.currentTime = payload.new.current_time;
+      video.currentTime = payload.new.current_playback_time;
       if (payload.new.is_playing) {
         video.play();
       } else {
@@ -242,7 +233,7 @@ await channel.subscribe();
 ### Posting Comments
 
 ```javascript
-const response = await fetch('https://your-project.supabase.co/functions/v1/comments-create', {
+const response = await fetch('https://ahigvhlqlikkkjsjikcj.supabase.co/functions/v1/comments-create', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -309,39 +300,22 @@ CREATE INDEX CONCURRENTLY idx_room_members_presence
 ON room_members (room_id, last_heartbeat DESC, is_synced);
 
 CREATE INDEX CONCURRENTLY idx_rooms_state 
-ON rooms (room_id, is_playing, current_time, updated_at DESC);
-```
-
-### Environment Variables
-
-```bash
-# Development
-SUPABASE_DB_URL=postgresql://...
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-key
-
-# Production (additional)
-NODE_ENV=production
-LOG_LEVEL=info
-METRICS_ENABLED=true
-REALTIME_MAX_EVENTS_PER_SECOND=10
+ON rooms (room_id, is_playing, current_playback_time, updated_at DESC);
 ```
 
 ## 🧪 Testing
 
-### Local Development
+### Supabase Environment Testing
 
 ```bash
-# Start local Supabase
-supabase start
-
-# Run functions locally with Realtime
-supabase functions serve --env-file .env
+# Test functions directly in Supabase Dashboard
+# Use the Function Editor to test individual functions
 
 # Test Realtime connection
-curl -X POST http://localhost:54321/functions/v1/rooms/create-realtime \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Test Room","anime_id":"test","anime_title":"Test","episode_number":1,"video_url":"https://test.com","host_user_id":"test","host_username":"TestUser","is_public":true}'
+# Use Supabase Dashboard → Realtime → Inspect connections
+
+# Test database operations
+# Use Supabase SQL Editor for direct database testing
 ```
 
 ### Realtime Testing
@@ -362,14 +336,11 @@ if (error) {
 ### Integration Testing
 
 ```bash
-# Run integration tests
-npm run test:integration
+# Test functions via Supabase Dashboard
+# Navigate to Edge Functions → Test each function
 
-# Run load tests for Realtime
-npm run test:load:realtime
-
-# Run sync tests
-npm run test:sync
+# Monitor Realtime events
+# Use Supabase Dashboard → Realtime → Monitor channels
 ```
 
 ## 📊 Monitoring
@@ -433,50 +404,9 @@ supabase functions deploy  # Deploys all optimized functions
 supabase db shell --command "SELECT * FROM pg_publication_tables WHERE pubname = 'supabase_realtime';"
 
 # Test deployment
-curl -X POST https://your-project.supabase.co/functions/v1/rooms/create-realtime \
+curl -X POST https://ahigvhlqlikkkjsjikcj.supabase.co/functions/v1/rooms-create \
   -H "Content-Type: application/json" \
   -d '{"title":"Production Test","anime_id":"test","anime_title":"Test","episode_number":1,"video_url":"https://test.com","host_user_id":"test","host_username":"TestUser","is_public":true}'
-```
-
-### Environment-Specific Configs
-
-```bash
-# Production
-supabase functions deploy --env production
-
-# Staging  
-supabase functions deploy --env staging
-
-# Development
-supabase functions serve --env-file .env.local
-```
-
-### CI/CD Pipeline
-
-```yaml
-# .github/workflows/deploy.yml
-name: Deploy to Supabase
-on:
-  push:
-    branches: [main]
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-      - run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_ID }}
-      - run: supabase db push
-      - run: supabase functions deploy
-      - name: Test Realtime
-        run: |
-          curl -X POST ${{ secrets.SUPABASE_URL }}/functions/v1/rooms/create-realtime \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"title":"CI Test","anime_id":"test","anime_title":"Test","episode_number":1,"video_url":"https://test.com","host_user_id":"ci-test","host_username":"CITest","is_public":true}'
 ```
 
 ## 🔒 Security
@@ -505,244 +435,30 @@ const RATE_LIMITS = {
 };
 ```
 
-### Data Validation
-
-All inputs are validated at multiple layers:
-
-```typescript
-// Example validation
-function validateRoomCreation(data: CreateRoomRequest) {
-  if (!data.title || data.title.length > 255) {
-    throw new Error('Invalid title');
-  }
-  if (data.episode_number < 1) {
-    throw new Error('Invalid episode number');
-  }
-  if (!data.video_url || !isValidUrl(data.video_url)) {
-    throw new Error('Invalid video URL');
-  }
-  // ... comprehensive validations
-}
-```
-
-### Realtime Security
-
-- **Channel Authentication**: Room access validated before WebSocket connection
-- **Presence Privacy**: Only room members can see presence data
-- **Event Filtering**: Users only receive events for rooms they're in
-- **Message Validation**: All Realtime events are validated server-side
-
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
-1. **Realtime Connection Issues**
-   - Check WebSocket connectivity in browser dev tools
-   - Verify Realtime is enabled in Supabase project
-   - Ensure user is properly joined to room before connecting
-
-2. **Sync Not Working**
-   - Verify presence updates are being sent (check network tab)
-   - Check database triggers are working
-   - Review room membership and host status
-
-3. **Host Controls Not Working**
-   - Verify user is listed as host in room_members table
-   - Check rate limiting status
-   - Validate room membership is active
-
-4. **Comments Not Saving**
-   - Check message length (<1000 chars)
-   - Verify user is in room (if room_id provided)
-   - Check rate limiting
-
-### Debug Tools
-
-```javascript
-// Realtime debug panel
-class RealtimeDebugPanel {
-  constructor(client) {
-    this.client = client;
-    this.metrics = [];
-    this.debugMode = true;
-  }
-  
-  logRealtimeEvent(event, data) {
-    if (!this.debugMode) return;
-    
-    this.metrics.push({
-      timestamp: Date.now(),
-      event,
-      data,
-      connectionState: this.client.realtime.isConnected
-    });
-    
-    console.log('🔗 Realtime Event:', { event, data });
-    
-    // Keep last 100 events
-    if (this.metrics.length > 100) {
-      this.metrics.shift();
-    }
-  }
-  
-  exportDebugLog() {
-    return {
-      connectionState: this.client.realtime.isConnected,
-      eventHistory: this.metrics,
-      summary: {
-        totalEvents: this.metrics.length,
-        connectionUptime: this.calculateUptime(),
-        averageLatency: this.calculateAverageLatency()
-      }
-    };
-  }
-}
-
-// Presence monitoring
-function monitorPresence(channel) {
-  channel.on('presence', { event: 'sync' }, () => {
-    const state = channel.presenceState();
-    console.log('👥 Presence State:', state);
-    
-    // Calculate sync statistics
-    const totalMembers = Object.keys(state).length;
-    const syncedMembers = Object.values(state)
-      .flat()
-      .filter(member => member.is_synced).length;
-    
-    console.log(`📊 Sync: ${syncedMembers}/${totalMembers} members synced`);
-  });
-}
-
-// Enable debug logging
-supabase.realtime.setLogger(console);
-```
-
-### Performance Issues
-
-1. **High Database Load**
-   - Check connection pooling configuration
-   - Review query performance with EXPLAIN ANALYZE
-   - Consider read replicas for scaling
-
-2. **Slow Realtime Updates**
-   - Optimize presence update frequency
-   - Check database trigger performance
-   - Monitor WebSocket message queue
-
-3. **Memory Usage**
-   - Monitor presence state size
-   - Clean up old presence data
-   - Optimize client-side event handling
-
-## 📚 Documentation
-
-- [API Reference](./docs/API_REFERENCE.md) - Complete API documentation
-- [WebSocket Events](./docs/WEBSOCKET_EVENTS.md) - Real-time event guide
-- [Database Schema](./docs/DATABASE_SCHEMA.md) - Database structure and design
-- [Sync Algorithm](./docs/SYNC_ALGORITHM.md) - Synchronization system details
-- [Realtime Architecture](./docs/REALTIME_ARCHITECTURE.md) - WebSocket-first design
-- [Client Implementation Guide](./docs/REALTIME_CLIENT_GUIDE.md) - Complete client setup
-
-## 🤝 Contributing
-
-We welcome contributions to improve the platform! Please follow these guidelines:
-
-1. **Fork the repository** and create a feature branch
-2. **Follow the Realtime-first architecture** - use WebSocket events over HTTP polling
-3. **Add comprehensive tests** for new functionality, especially Realtime features
-4. **Update documentation** for any API changes or new features
-5. **Test with multiple concurrent users** to ensure Realtime performance
-6. **Submit a pull request** with detailed description of changes
-
-### Development Guidelines
-
-- **TypeScript First**: All new code must be written in TypeScript
-- **Realtime-First**: Always consider WebSocket events before HTTP calls
-- **Error Handling**: Comprehensive error handling for network issues
-- **Performance**: Test with 50+ concurrent users when possible
-- **Security**: Follow RLS patterns and validate all inputs
-- **Documentation**: Update relevant docs for any changes
-
-### Realtime Development
-
-When working with Realtime features:
-
-```javascript
-// Always test Realtime connections
-const testConnection = async () => {
-  const channel = supabase.channel('test');
-  const result = await channel.subscribe();
-  if (result.error) {
-    throw new Error(`Realtime connection failed: ${result.error.message}`);
-  }
-  return true;
-};
-
-// Monitor presence during development
-channel.on('presence', { event: 'sync' }, () => {
-  console.log('Presence updated:', channel.presenceState());
-});
-```
+1. **Realtime Connection Issues**: Check WebSocket connectivity and browser console
+2. **Sync Problems**: Verify presence tracking and database triggers
+3. **Room Creation Failures**: Check RLS policies and database constraints
+4. **Performance Issues**: Monitor database connections and query performance
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is open source and available under the [MIT License](LICENSE).
 
-## 🆘 Support
+## 🤝 Contributing
+
+Contributions are welcome! Please read our contributing guidelines and submit pull requests to the main branch.
+
+## 📞 Support
 
 For support and questions:
-
-- **Create an Issue**: Report bugs or request features via GitHub Issues
-- **Documentation**: Check the comprehensive docs in the `/docs` folder
-- **Realtime Issues**: Include WebSocket connection details in bug reports
-- **Performance Issues**: Provide metrics and user count when reporting
-
-### Getting Help
-
-When requesting support, please include:
-
-1. **Environment**: Supabase project details and region
-2. **Realtime Status**: WebSocket connection state and any error messages
-3. **Browser/Client**: Browser version, OS, and network conditions
-4. **Reproduction Steps**: Clear steps to reproduce the issue
-5. **Expected vs Actual**: What you expected vs what actually happened
-
-### Community
-
-- **Discord**: Join our community for real-time discussions
-- **GitHub Discussions**: Feature requests and architectural questions
-- **Examples**: Check the `examples/` folder for implementation patterns
-
-## 🗺️ Roadmap
-
-### Upcoming Features
-
-- **Video Quality Adaptation**: Automatic quality based on connection speed
-- **Multi-Language Support**: Internationalization for global audiences
-- **Mobile App Support**: React Native implementation
-- **Advanced Analytics Dashboard**: Room performance and user engagement metrics
-- **Custom Emoji Reactions**: Real-time emoji reactions during watching
-- **Watch Parties Scheduling**: Schedule and invite friends to future sessions
-- **Streaming Service Integrations**: Direct integration with popular anime platforms
-
-### Performance Improvements
-
-- **Geographic Distribution**: Edge locations for better global performance
-- **Advanced Caching**: Redis integration for frequently accessed data
-- **Database Sharding**: Horizontal scaling for large deployments
-- **CDN Integration**: Static asset delivery optimization
-- **Load Balancing**: Intelligent traffic distribution
-- **Connection Pooling**: Optimized database connection management
-
-### Platform Features
-
-- **User Profiles**: Persistent user accounts and watch history
-- **Friend System**: Follow friends and join their watch sessions
-- **Achievement System**: Gamification with watching milestones
-- **Recommendations**: AI-powered anime suggestions
-- **Social Features**: Share favorite moments and create clips
+- Create an issue in the GitHub repository
+- Check the documentation in the `/docs` folder
+- Review the API reference for detailed endpoint information
 
 ---
 
-**Built with ❤️ for anime fans everywhere**
+**Built with ❤️ using Supabase Realtime for seamless anime watching experiences!**

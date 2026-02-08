@@ -1,754 +1,539 @@
 # Synchronization Algorithm
 
-This document explains the presence-based synchronization system that keeps all room members in perfect sync during anime watching sessions using Supabase Realtime.
+Detailed explanation of the real-time synchronization system that enables multiple users to watch anime together in perfect sync.
 
 ## Overview
 
-The synchronization system uses a presence-first architecture where:
+The Watchium synchronization algorithm ensures that all participants in a room maintain near-perfect playback synchronization with <100ms latency. The system uses a hybrid approach combining WebSocket events, database triggers, and presence tracking.
 
-1. **Host** controls playback (play/pause/seek) via minimal HTTP calls
-2. **Database Changes** trigger automatic Realtime broadcasts to all members
-3. **Members** send presence updates with their current video state
-4. **Server** calculates sync status and maintains room state
+## Architecture
 
-## Core Components
+### Components
 
-### 1. Presence-Based Sync
+1. **Host Authority Model** - Only the room host controls playback
+2. **Real-time Broadcasting** - Instant event distribution via WebSocket
+3. **Presence Tracking** - Continuous sync status monitoring
+4. **Database Triggers** - Automatic event generation
+5. **Client-side Sync** - Automatic client adjustment to host state
 
-The presence system replaces traditional HTTP heartbeats for efficient status tracking.
+### Data Flow
 
-#### Update Frequency
-- **Interval**: Every 3 seconds per user
-- **Purpose**: Continuous sync status monitoring
-- **Tolerance**: 2 seconds difference threshold
-
-#### Data Flow
 ```
-Member Client → Presence Update → Realtime Channel → Database Trigger → Broadcast to All
+Host Action → Database Trigger → Realtime Broadcast → Client Sync → Video Update
 ```
 
-#### Presence Payload
-```javascript
-{
-  user_id: "user123",
-  username: "AnimeFan",
-  current_time: 123.45,
-  is_playing: true,
-  last_update: 1704110400000
-}
-```
+## Core Algorithm
 
-### 2. Database-Driven Events
+### 1. Host Control Flow
 
-Room state changes automatically trigger Realtime broadcasts to all members.
-
-#### Host Control Flow
-```javascript
-// Host action (HTTP call)
-await fetch('/sync/control', {
-  method: 'POST',
-  body: JSON.stringify({
-    room_id: 'abc123',
-    user_id: 'host123',
-    action: 'play',
-    current_time: 150.0
-  })
-});
-
-// Database update triggers Realtime broadcast
-// All members receive postgres_changes event
-```
-
-#### Event Processing
-```sql
--- When host updates room state
-UPDATE rooms 
-SET is_playing = true, current_time = 150.0
-WHERE room_id = 'abc123';
-
--- This automatically triggers Realtime broadcast
--- All connected clients receive the change
-```
-
-### 3. Sync Status Calculation
-
-#### Time Difference Algorithm
-```javascript
-function calculateSyncStatus(hostTime, memberTime) {
-  const timeDifference = Math.abs(hostTime - memberTime);
-  const isSynced = timeDifference <= 2; // 2 seconds tolerance
+```typescript
+// Host initiates action (play/pause/seek)
+async function hostControl(action: 'play' | 'pause' | 'seek', currentTime?: number) {
+  // 1. Validate host authority
+  const isHost = await validateHostAuthority(roomId, userId);
+  if (!isHost) throw new Error('Only host can control playback');
   
-  return {
-    isSynced,
-    timeDifference,
-    hostTime,
-    memberTime,
-    syncPercentage: Math.max(0, 100 - (timeDifference * 10))
-  };
-}
-```
-
-#### Sync Status Levels
-- **Perfect Sync**: 0-0.5 seconds difference
-- **Good Sync**: 0.5-1 second difference  
-- **Minor Drift**: 1-2 seconds difference
-- **Out of Sync**: >2 seconds difference
-
-#### Database Calculation
-```sql
--- Automatic sync status calculation in trigger
-CREATE OR REPLACE FUNCTION update_member_presence()
-RETURNS TRIGGER AS $$
-BEGIN
-  -- Calculate sync status based on room state
-  SELECT 
-    current_time, 
-    is_playing 
-  INTO NEW.current_time, NEW.is_synced
-  FROM rooms 
-  WHERE room_id = NEW.room_id;
-  
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-```
-
----
-
-### 4. Playback Control Flow
-
-#### Host Actions
-Only the host can initiate playback controls through the unified sync endpoint:
-
-```javascript
-// Host plays video
-async function handlePlay() {
-  const response = await fetch('/sync/control', {
-    method: 'POST',
-    body: JSON.stringify({
-      room_id: this.roomId,
-      user_id: this.userId,
-      action: 'play',
-      current_time: this.video.currentTime
-    })
+  // 2. Update room state (triggers broadcast)
+  await updateRoomState(roomId, {
+    is_playing: action === 'play',
+    current_playback_time: currentTime || getCurrentTime(),
+    updated_at: now()
   });
   
-  // Database update triggers automatic broadcast to all members
-  // No manual WebSocket sending required
+  // 3. Database trigger fires real-time broadcast
+  // 4. All clients receive event and sync automatically
 }
 ```
 
-#### Member Response
-```javascript
-// Member receives database change event
-channel.on('postgres_changes', 
-  { event: 'UPDATE', schema: 'public', table: 'rooms' },
-  (payload) => {
-    if (payload.new.host_user_id !== this.userId) {
-      // Auto-sync to host state
-      this.video.currentTime = payload.new.current_time;
-      if (payload.new.is_playing) {
-        this.video.play();
-      } else {
+### 2. Client Sync Algorithm
+
+```typescript
+class SyncManager {
+  private toleranceMs = 2000; // 2 seconds tolerance
+  private heartbeatInterval = 3000; // 3 seconds
+  
+  constructor(private video: HTMLVideoElement, private userId: string) {
+    this.setupEventHandlers();
+    this.startHeartbeat();
+  }
+  
+  private setupEventHandlers() {
+    // Listen for real-time events
+    this.channel.on('postgres_changes', 
+      { event: 'UPDATE', table: 'rooms' },
+      (payload) => {
+        if (payload.new.host_user_id !== this.userId) {
+          this.syncToHost(payload.new);
+        }
+      }
+    );
+  }
+  
+  private syncToHost(roomState: any) {
+    const targetTime = roomState.current_playback_time;
+    const currentTime = this.video.currentTime;
+    const timeDiff = Math.abs(targetTime - currentTime);
+    
+    // Only sync if difference is significant
+    if (timeDiff > 0.1) { // 100ms threshold
+      this.video.currentTime = targetTime;
+      
+      // Handle play/pause state
+      if (roomState.is_playing && this.video.paused) {
+        this.video.play().catch(console.error);
+      } else if (!roomState.is_playing && !this.video.paused) {
         this.video.pause();
       }
     }
   }
-);
-```
-
----
-
-### 5. The "Live" Button
-
-When users get out of sync, they can click the "Live" button to immediately resync.
-
-#### Implementation
-```javascript
-async function syncToLive() {
-  // Get current host state via optimized function
-  const { data } = await supabase.rpc('get_room_sync_state', {
-    p_room_id: this.roomId,
-    p_user_id: this.userId
-  });
   
-  if (data.error) {
-    throw new Error(data.error);
+  private startHeartbeat() {
+    setInterval(async () => {
+      await this.sendHeartbeat();
+    }, this.heartbeatInterval);
   }
   
-  // Seek to host position
-  this.video.currentTime = data.room.current_time;
-  
-  // Update sync status
-  this.isSynced = data.user_sync.is_synced;
-  this.updateSyncIndicator();
-  
-  // Show feedback
-  this.showNotification('Synced to live');
-}
-```
-
-#### UI States
-```html
-<button 
-  @click="syncToLive"
-  :class="{ 'btn-danger': !isSynced, 'btn-success': isSynced }"
-  :disabled="isSynced">
-  {{ isSynced ? '✓ Live' : '⚡ Sync to Live' }}
-</button>
-```
-
----
-
-## Algorithm Details
-
-### 1. Client-Side Algorithm
-
-#### Initialization
-```javascript
-class SyncClient {
-  constructor(roomId, userId) {
-    this.roomId = roomId;
-    this.userId = userId;
-    this.isHost = false;
-    this.heartbeatInterval = null;
-    this.lastSyncTime = 0;
-    this.syncTolerance = 2; // seconds
-  }
-
-  start() {
-    // Start heartbeat loop
-    this.heartbeatInterval = setInterval(() => {
-      this.sendHeartbeat();
-    }, 2500); // 2.5 seconds
-    
-    // Listen for server events
-    this.setupEventListeners();
-  }
-
-  async sendHeartbeat() {
-    try {
-      const response = await fetch('/sync/heartbeat', {
-        method: 'POST',
-        body: JSON.stringify({
-          room_id: this.roomId,
-          user_id: this.userId,
-          current_time: this.video.currentTime,
-          is_playing: !this.video.paused
-        })
-      });
-      
-      const data = await response.json();
-      this.updateSyncStatus(data.data.sync_status);
-      
-    } catch (error) {
-      console.error('Heartbeat failed:', error);
-    }
+  private async sendHeartbeat() {
+    await this.channel.track({
+      user_id: this.userId,
+      current_time: this.video.currentTime,
+      is_playing: !this.video.paused
+    });
   }
 }
 ```
 
-#### Event Handling
-```javascript
-setupEventListeners() {
-  // Listen for playback events
-  this.channel.on('broadcast', { event: 'play' }, (payload) => {
-    if (!this.isHost) {
-      this.syncToHost(payload.payload.current_time, true);
-    }
-  });
-  
-  this.channel.on('broadcast', { event: 'pause' }, (payload) => {
-    if (!this.isHost) {
-      this.syncToHost(payload.payload.current_time, false);
-    }
-  });
-  
-  this.channel.on('broadcast', { event: 'seek' }, (payload) => {
-    if (!this.isHost) {
-      this.syncToHost(payload.payload.current_time, this.video.paused);
-    }
-  });
-}
+### 3. Sync Status Calculation
 
-syncToHost(hostTime, shouldPlay) {
-  const currentTime = this.video.currentTime;
-  const timeDiff = Math.abs(hostTime - currentTime);
-  
-  // Only seek if difference is significant
-  if (timeDiff > 0.5) {
-    this.video.currentTime = hostTime;
-  }
-  
-  // Sync playback state
-  if (shouldPlay && this.video.paused) {
-    this.video.play();
-  } else if (!shouldPlay && !this.video.paused) {
-    this.video.pause();
-  }
-  
-  this.lastSyncTime = Date.now();
-  this.updateSyncIndicator(true);
-}
-```
-
-### 2. Server-Side Algorithm
-
-#### Heartbeat Processing
-```typescript
-// In /sync/heartbeat/index.ts
-export async function processHeartbeat(data: HeartbeatRequest) {
-  // 1. Validate user is in room
-  const member = await validateRoomMember(data.room_id, data.user_id);
-  
-  // 2. Get current room state
-  const room = await getRoom(data.room_id);
-  
-  // 3. Calculate sync status
-  const timeDifference = Math.abs(room.current_time - data.current_time);
-  const isSynced = timeDifference <= 2;
-  
-  // 4. Update member state
-  await updateMemberState(data.room_id, data.user_id, {
-    current_time: data.current_time,
-    is_synced: isSynced,
-    last_heartbeat: new Date()
-  });
-  
-  // 5. Record sync state for analytics
-  await createSyncState({
-    room_id: data.room_id,
-    user_id: data.user_id,
-    host_time: room.current_time,
-    member_time: data.current_time,
-    time_difference: timeDifference,
-    is_synced: isSynced,
-    sync_event_type: 'heartbeat'
-  });
-  
-  // 6. Broadcast sync status to room
-  await broadcastToRoom(data.room_id, 'heartbeat', {
-    user_id: data.user_id,
-    current_time: data.current_time,
-    is_synced: isSynced
-  });
-  
-  // 7. Return sync info to client
-  return {
-    sync_status: { is_synced: isSynced, time_difference: timeDifference },
-    room_info: {
-      current_time: room.current_time,
-      is_playing: room.is_playing
-    }
-  };
-}
-```
-
-#### Playback Control Processing
-```typescript
-// In /sync/play-pause/index.ts
-export async function processPlayPause(data: PlayPauseRequest) {
-  // 1. Validate user is host
-  const member = await validateHost(data.room_id, data.user_id);
-  
-  // 2. Update room playback state
-  const room = await updateRoomState(data.room_id, {
-    is_playing: data.is_playing,
-    current_time: data.current_time || 'current_time'
-  });
-  
-  // 3. Mark all members as needing sync
-  await markAllMembersForSync(data.room_id);
-  
-  // 4. Create sync state records
-  await createBulkSyncStates(data.room_id, room, 'play_pause');
-  
-  // 5. Broadcast to all members
-  await broadcastToRoom(data.room_id, data.is_playing ? 'play' : 'pause', {
-    current_time: room.current_time,
-    user_id: data.user_id,
-    username: member.username
-  });
-  
-  return { room, message: `Playback ${data.is_playing ? 'resumed' : 'paused'}` };
-}
-```
-
----
-
-## Edge Cases & Solutions
-
-### 1. Network Latency
-
-#### Problem
-High latency causes delayed heartbeat updates.
-
-#### Solution
-```javascript
-// Compensate for network latency
-function compensateForLatency(serverTime, clientTime, rtt) {
-  const latencyCompensation = rtt / 2;
-  const adjustedServerTime = serverTime + latencyCompensation;
-  return adjustedServerTime;
-}
-
-// Measure RTT
-async function measureRTT() {
-  const startTime = Date.now();
-  await fetch('/sync/ping');
-  const rtt = Date.now() - startTime;
-  return rtt;
-}
-```
-
-### 2. Video Loading Delays
-
-#### Problem
-Video buffering causes sync issues.
-
-#### Solution
-```javascript
-// Wait for video to be ready before seeking
-function syncWhenReady(targetTime) {
-  if (this.video.readyState >= 2) { // HAVE_CURRENT_DATA
-    this.video.currentTime = targetTime;
-  } else {
-    this.video.addEventListener('loadeddata', () => {
-      this.video.currentTime = targetTime;
-    }, { once: true });
-  }
-}
-```
-
-### 3. Host Disconnection
-
-#### Problem
-Host leaves unexpectedly, breaking sync.
-
-#### Solution
 ```sql
--- Automatic host transfer trigger
-CREATE OR REPLACE FUNCTION transfer_host_on_leave()
-RETURNS TRIGGER AS $$
+-- Database function for sync status calculation
+CREATE OR REPLACE FUNCTION calculate_sync_status(
+    p_host_time DECIMAL(10,2),
+    p_member_time DECIMAL(10,2)
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+    time_diff DECIMAL(10,2);
 BEGIN
-  IF OLD.is_host = true THEN
-    -- Transfer to oldest member
-    UPDATE room_members 
-    SET is_host = true 
-    WHERE room_id = OLD.room_id 
-      AND user_id != OLD.user_id
-    ORDER BY joined_at ASC 
-    LIMIT 1;
-    
-    -- Notify room of host change
-    PERFORM pg_notify('host_changed', 
-      json_build_object(
-        'room_id', OLD.room_id,
-        'new_host', NEW.host_username
-      )::text
-    );
-  END IF;
-  RETURN OLD;
+    time_diff := ABS(p_host_time - p_member_time);
+    RETURN time_diff <= 2; -- 2 seconds tolerance
 END;
 $$ LANGUAGE plpgsql;
 ```
 
-### 4. Clock Drift
+## Event Types and Handling
 
-#### Problem
-Client device clocks drift over time.
+### Playback Events
 
-#### Solution
-```javascript
-// Periodic clock synchronization
-class ClockSync {
-  constructor() {
-    this.serverOffset = 0;
-    this.lastSync = 0;
-  }
-  
-  async syncClock() {
-    const clientTime = Date.now();
-    const response = await fetch('/sync/time');
-    const serverTime = await response.json();
-    
-    const rtt = Date.now() - clientTime;
-    this.serverOffset = serverTime.time - (clientTime + rtt / 2);
-    this.lastSync = Date.now();
-  }
-  
-  getServerTime() {
-    return Date.now() + this.serverOffset;
-  }
+#### Play Event
+```typescript
+interface PlayEvent {
+  type: 'play';
+  payload: {
+    current_time: number;
+    user_id: string;
+    username: string;
+  };
+  timestamp: number;
 }
+
+// Client handling
+channel.on('broadcast', { event: 'play' }, (payload) => {
+  if (payload.payload.user_id !== currentUserId) {
+    video.currentTime = payload.payload.current_time;
+    video.play();
+    updateSyncStatus(true);
+  }
+});
 ```
 
----
+#### Pause Event
+```typescript
+interface PauseEvent {
+  type: 'pause';
+  payload: {
+    current_time: number;
+    user_id: string;
+    username: string;
+  };
+  timestamp: number;
+}
+
+// Client handling
+channel.on('broadcast', { event: 'pause' }, (payload) => {
+  if (payload.payload.user_id !== currentUserId) {
+    video.currentTime = payload.payload.current_time;
+    video.pause();
+    updateSyncStatus(true);
+  }
+});
+```
+
+#### Seek Event
+```typescript
+interface SeekEvent {
+  type: 'seek';
+  payload: {
+    current_time: number;
+    user_id: string;
+    username: string;
+  };
+  timestamp: number;
+}
+
+// Client handling
+channel.on('broadcast', { event: 'seek' }, (payload) => {
+  if (payload.payload.user_id !== currentUserId) {
+    video.currentTime = payload.payload.current_time;
+    updateSyncStatus(true);
+  }
+});
+```
+
+### Presence Events
+
+#### Heartbeat
+```typescript
+interface HeartbeatEvent {
+  type: 'heartbeat';
+  payload: {
+    user_id: string;
+    current_time: number;
+    is_synced: boolean;
+  };
+  timestamp: number;
+}
+
+// Client sends heartbeat every 3 seconds
+setInterval(() => {
+  channel.track({
+    user_id: currentUserId,
+    current_time: video.currentTime,
+    is_playing: !video.paused
+  });
+}, 3000);
+```
+
+## Sync State Management
+
+### Database Schema
+
+```sql
+CREATE TABLE sync_states (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    room_id VARCHAR(10) NOT NULL,
+    user_id VARCHAR(100) NOT NULL,
+    host_time DECIMAL(10,2) NOT NULL,
+    member_time DECIMAL(10,2) NOT NULL,
+    time_difference DECIMAL(10,2) NOT NULL,
+    is_synced BOOLEAN NOT NULL,
+    sync_event_type VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+### Sync State Creation
+
+```sql
+-- Triggered on every playback event
+CREATE OR REPLACE FUNCTION create_sync_state_record(
+    p_room_id VARCHAR(10),
+    p_user_id VARCHAR(100),
+    p_host_time DECIMAL(10,2),
+    p_member_time DECIMAL(10,2),
+    p_sync_event_type VARCHAR(50)
+)
+RETURNS void AS $$
+DECLARE
+    time_diff DECIMAL(10,2);
+    is_synced BOOLEAN;
+BEGIN
+    time_diff := ABS(p_host_time - p_member_time);
+    is_synced := time_diff <= 2;
+    
+    INSERT INTO sync_states (
+        room_id, user_id, host_time, member_time,
+        time_difference, is_synced, sync_event_type
+    ) VALUES (
+        p_room_id, p_user_id, p_host_time, p_member_time,
+        time_diff, is_synced, p_sync_event_type
+    );
+    
+    -- Update member sync status
+    UPDATE room_members 
+    SET is_synced = is_synced,
+        last_heartbeat = NOW()
+    WHERE room_id = p_room_id AND user_id = p_user_id;
+END;
+$$ LANGUAGE plpgsql;
+```
 
 ## Performance Optimization
 
-### 1. Batch Processing
-
-```typescript
-// Process multiple heartbeats in batches
-class HeartbeatProcessor {
-  private batch: HeartbeatRequest[] = [];
-  private batchTimeout: NodeJS.Timeout;
-  
-  async addHeartbeat(heartbeat: HeartbeatRequest) {
-    this.batch.push(heartbeat);
-    
-    if (this.batch.length >= 10) {
-      await this.processBatch();
-    } else if (!this.batchTimeout) {
-      this.batchTimeout = setTimeout(() => {
-        this.processBatch();
-      }, 100);
-    }
-  }
-  
-  private async processBatch() {
-    if (this.batch.length === 0) return;
-    
-    await processBulkHeartbeats(this.batch);
-    this.batch = [];
-    
-    if (this.batchTimeout) {
-      clearTimeout(this.batchTimeout);
-      this.batchTimeout = null;
-    }
-  }
-}
-```
-
-### 2. Database Optimization
+### Bulk Sync Updates
 
 ```sql
--- Optimized sync state queries
-CREATE INDEX CONCURRENTLY idx_sync_states_composite 
-ON sync_states (room_id, created_at DESC, user_id);
-
--- Partition sync states by time for better performance
-CREATE TABLE sync_states_y2024m01 PARTITION OF sync_states
-FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
+-- Update all members' sync status efficiently
+CREATE OR REPLACE FUNCTION bulk_sync_update(
+    p_room_id VARCHAR(10),
+    p_host_time DECIMAL(10,2),
+    p_sync_event_type VARCHAR(50)
+)
+RETURNS void AS $$
+DECLARE
+    member_record RECORD;
+BEGIN
+    -- Process all members in single query
+    FOR member_record IN 
+        SELECT user_id, current_playback_time 
+        FROM room_members 
+        WHERE room_id = p_room_id
+    LOOP
+        INSERT INTO sync_states (
+            room_id, user_id, host_time, member_time, 
+            time_difference, is_synced, sync_event_type
+        ) VALUES (
+            p_room_id, 
+            member_record.user_id, 
+            p_host_time, 
+            member_record.current_playback_time,
+            ABS(p_host_time - member_record.current_playback_time),
+            ABS(p_host_time - member_record.current_playback_time) <= 2,
+            p_sync_event_type
+        );
+    END LOOP;
+    
+    -- Update room activity
+    UPDATE rooms 
+    SET last_activity = NOW(), updated_at = NOW()
+    WHERE room_id = p_room_id;
+END;
+$$ LANGUAGE plpgsql;
 ```
 
-### 3. Caching
+### Presence-Based Optimization
+
+```sql
+-- Optimized member presence trigger
+CREATE OR REPLACE FUNCTION update_member_presence()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.last_heartbeat = NOW();
+    
+    -- Calculate sync status based on room state
+    SELECT 
+        current_playback_time, 
+        is_playing 
+    INTO NEW.current_playback_time, NEW.is_synced
+    FROM rooms 
+    WHERE room_id = NEW.room_id;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+## Client-Side Optimization
+
+### Debouncing
 
 ```typescript
-// Cache room state to reduce database load
-class RoomStateCache {
-  private cache = new Map<string, RoomState>();
-  private ttl = 5000; // 5 seconds
+class OptimizedSyncManager {
+  private seekDebouncer = this.debounce((time: number) => {
+    this.seekToTime(time);
+  }, 500);
   
-  async getRoomState(roomId: string): Promise<RoomState> {
-    const cached = this.cache.get(roomId);
-    if (cached && Date.now() - cached.timestamp < this.ttl) {
-      return cached.data;
+  private playPauseDebouncer = this.debounce((action: 'play' | 'pause') => {
+    this.controlPlayback(action);
+  }, 200);
+  
+  video.addEventListener('seek', () => {
+    this.seekDebouncer(video.currentTime);
+  });
+  
+  video.addEventListener('play', () => {
+    this.playPauseDebouncer('play');
+  });
+  
+  video.addEventListener('pause', () => {
+    this.playPauseDebouncer('pause');
+  });
+}
+```
+
+### Smart Syncing
+
+```typescript
+class SmartSyncManager {
+  private lastSyncTime = 0;
+  private syncThreshold = 0.1; // 100ms
+  
+  private shouldSync(targetTime: number): boolean {
+    const timeDiff = Math.abs(targetTime - this.video.currentTime);
+    const timeSinceLastSync = Date.now() - this.lastSyncTime;
+    
+    return timeDiff > this.syncThreshold && timeSinceLastSync > 50;
+  }
+  
+  private syncToTime(targetTime: number): void {
+    if (this.shouldSync(targetTime)) {
+      this.video.currentTime = targetTime;
+      this.lastSyncTime = Date.now();
     }
-    
-    const roomState = await fetchRoomStateFromDB(roomId);
-    this.cache.set(roomId, {
-      data: roomState,
-      timestamp: Date.now()
-    });
-    
-    return roomState;
   }
 }
 ```
 
----
+## Error Handling
 
-## Monitoring & Analytics
-
-### 1. Sync Metrics
+### Network Resilience
 
 ```typescript
-interface SyncMetrics {
-  avgLatency: number;
-  syncPercentage: number;
-  outOfSyncUsers: number;
-  heartbeatFrequency: number;
-  networkQuality: 'excellent' | 'good' | 'poor';
-}
-
-async function calculateSyncMetrics(roomId: string): Promise<SyncMetrics> {
-  const recentStates = await getRecentSyncStates(roomId, 60); // Last minute
+class ResilientSyncManager {
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
   
-  const avgLatency = recentStates.reduce((sum, state) => 
-    sum + state.time_difference, 0) / recentStates.length;
+  private async handleConnectionError(error: Error): Promise<void> {
+    console.error('Connection error:', error);
+    
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+      
+      setTimeout(() => {
+        this.reconnect();
+      }, delay);
+    } else {
+      this.showConnectionError();
+    }
+  }
   
-  const syncPercentage = (recentStates.filter(s => s.is_synced).length / 
-    recentStates.length) * 100;
-  
-  return {
-    avgLatency,
-    syncPercentage,
-    outOfSyncUsers: recentStates.filter(s => !s.is_synced).length,
-    heartbeatFrequency: recentStates.length / 60, // per second
-    networkQuality: avgLatency < 0.5 ? 'excellent' : 
-                   avgLatency < 1.5 ? 'good' : 'poor'
-  };
+  private async reconnect(): Promise<void> {
+    try {
+      await this.channel.subscribe();
+      this.reconnectAttempts = 0;
+      this.hideConnectionError();
+    } catch (error) {
+      await this.handleConnectionError(error);
+    }
+  }
 }
 ```
 
-### 2. Alerting
+### Sync Recovery
 
 ```typescript
-// Alert on sync issues
-async function checkSyncHealth() {
-  const activeRooms = await getActiveRooms();
+class SyncRecoveryManager {
+  private syncQueue: Array<() => Promise<void>> = [];
+  private isRecovering = false;
   
-  for (const room of activeRooms) {
-    const metrics = await calculateSyncMetrics(room.room_id);
+  private async recoverSync(): Promise<void> {
+    if (this.isRecovering) return;
     
-    if (metrics.syncPercentage < 80) {
-      await sendAlert({
-        type: 'sync_issue',
-        room_id: room.room_id,
-        sync_percentage: metrics.syncPercentage,
-        avg_latency: metrics.avgLatency
+    this.isRecovering = true;
+    
+    try {
+      // Get current host state
+      const hostState = await this.getHostState();
+      
+      // Sync to host state
+      await this.syncToHostState(hostState);
+      
+      // Process queued sync operations
+      while (this.syncQueue.length > 0) {
+        const operation = this.syncQueue.shift();
+        await operation();
+      }
+      
+      this.isRecovering = false;
+    } catch (error) {
+      console.error('Sync recovery failed:', error);
+      setTimeout(() => this.recoverSync(), 2000);
+    }
+  }
+  
+  private queueSyncOperation(operation: () => Promise<void>): void {
+    if (this.isRecovering) {
+      this.syncQueue.push(operation);
+    } else {
+      operation().catch(error => {
+        console.error('Sync operation failed:', error);
+        this.queueSyncOperation(operation);
       });
     }
   }
 }
 ```
 
----
+## Analytics and Monitoring
 
-## Testing Strategy
+### Sync Metrics
 
-### 1. Unit Tests
-
-```typescript
-describe('Sync Algorithm', () => {
-  test('calculates sync status correctly', () => {
-    expect(calculateSyncStatus(100, 101)).toEqual({
-      isSynced: true,
-      timeDifference: 1,
-      syncPercentage: 90
-    });
-    
-    expect(calculateSyncStatus(100, 105)).toEqual({
-      isSynced: false,
-      timeDifference: 5,
-      syncPercentage: 50
-    });
-  });
-});
+```sql
+-- Sync performance metrics
+SELECT 
+    room_id,
+    sync_event_type,
+    COUNT(*) as event_count,
+    AVG(time_difference) as avg_time_diff,
+    COUNT(CASE WHEN is_synced THEN 1 END) as synced_count,
+    COUNT(*) as total_count,
+    ROUND(
+        (COUNT(CASE WHEN is_synced THEN 1 END) * 100.0 / COUNT(*)), 2
+    ) as sync_percentage
+FROM sync_states
+WHERE created_at > NOW() - INTERVAL '1 hour'
+GROUP BY room_id, sync_event_type
+ORDER BY event_count DESC;
 ```
 
-### 2. Integration Tests
+### Real-time Monitoring
 
 ```typescript
-describe('Multi-User Sync', () => {
-  test('host play broadcasts to all members', async () => {
-    const room = await createTestRoom();
-    const host = new TestClient(room.room_id, room.host_user_id, true);
-    const member1 = new TestClient(room.room_id, 'user1', false);
-    const member2 = new TestClient(room.room_id, 'user2', false);
+class SyncMonitor {
+  private metrics = {
+    totalEvents: 0,
+    syncErrors: 0,
+    avgLatency: 0,
+    activeUsers: 0
+  };
+  
+  private trackEvent(eventType: string, latency: number): void {
+    this.metrics.totalEvents++;
+    this.metrics.avgLatency = 
+      (this.metrics.avgLatency * (this.metrics.totalEvents - 1) + latency) / this.metrics.totalEvents;
     
-    await host.connect();
-    await member1.connect();
-    await member2.connect();
-    
-    await host.play();
-    
-    await waitFor(() => 
-      member1.video.currentTime === host.video.currentTime &&
-      member2.video.currentTime === host.video.currentTime
-    );
-    
-    expect(member1.video.paused).toBe(false);
-    expect(member2.video.paused).toBe(false);
-  });
-});
-```
-
-### 3. Load Testing
-
-```typescript
-// Test with 50 concurrent users
-describe('Performance Tests', () => {
-  test('handles 50 concurrent users', async () => {
-    const room = await createTestRoom();
-    const clients = [];
-    
-    // Create 50 clients
-    for (let i = 0; i < 50; i++) {
-      clients.push(new TestClient(room.room_id, `user${i}`, false));
-    }
-    
-    // Connect all clients
-    await Promise.all(clients.map(c => c.connect()));
-    
-    // Host seeks
-    const host = clients[0];
-    host.isHost = true;
-    await host.seek(300);
-    
-    // Verify all clients sync within 2 seconds
-    const startTime = Date.now();
-    await waitFor(() => 
-      clients.every(c => Math.abs(c.video.currentTime - 300) < 0.5)
-    );
-    
-    const syncTime = Date.now() - startTime;
-    expect(syncTime).toBeLessThan(2000); // Within 2 seconds
-  });
-});
-```
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Users showing as out of sync**
-   - Check network connectivity
-   - Verify heartbeat frequency
-   - Check video loading state
-
-2. **Host controls not working**
-   - Verify host status
-   - Check rate limiting
-   - Validate room membership
-
-3. **High latency**
-   - Check database performance
-   - Monitor network latency
-   - Review batch processing efficiency
-
-### Debug Tools
-
-```javascript
-// Sync debug panel
-class SyncDebugPanel {
-  constructor(client) {
-    this.client = client;
-    this.metrics = [];
+    // Send metrics to monitoring service
+    this.sendMetrics();
   }
   
-  logSyncEvent(event, data) {
-    this.metrics.push({
-      timestamp: Date.now(),
-      event,
-      data,
-      clientTime: this.client.video.currentTime,
-      isHost: this.client.isHost
+  private sendMetrics(): void {
+    // Send to monitoring dashboard
+    fetch('/api/metrics', {
+      method: 'POST',
+      body: JSON.stringify(this.metrics)
     });
-    
-    if (this.metrics.length > 100) {
-      this.metrics.shift(); // Keep last 100 events
-    }
-  }
-  
-  exportDebugLog() {
-    return JSON.stringify(this.metrics, null, 2);
   }
 }
 ```
 
-This synchronization algorithm ensures smooth, real-time coordination between all room members while handling edge cases and maintaining high performance.
+## Best Practices
+
+### Client Implementation
+
+1. **Debounce Rapid Events**: Prevent excessive sync operations
+2. **Handle Network Issues**: Implement reconnection logic
+3. **Optimize Video Updates**: Use smart sync thresholds
+4. **Monitor Performance**: Track sync latency and success rates
+5. **Graceful Degradation**: Fallback to polling if WebSocket fails
+
+### Server Optimization
+
+1. **Bulk Operations**: Process multiple members in single queries
+2. **Efficient Indexing**: Optimize for real-time queries
+3. **Connection Pooling**: Manage database connections efficiently
+4. **Data Retention**: Clean up old sync state data
+5. **Rate Limiting**: Prevent abuse and ensure stability
+
+This synchronization algorithm provides the foundation for seamless multi-user anime watching experiences with minimal latency and maximum reliability.
